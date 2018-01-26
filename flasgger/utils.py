@@ -270,8 +270,14 @@ def validate(
     if filepath is None and specs is None:
         abort(Response('Filepath or specs is needed to validate', status=500))
 
+    should_validate_headers = False
+
     if data is None:
-        data = request.json  # defaults
+        should_validate_headers = True
+        if request.method == 'GET':
+            data = request.args.to_dict()
+        else:
+            data = request.json  # defaults
     elif callable(data):
         # data=lambda: request.json
         data = data()
@@ -313,12 +319,10 @@ def validate(
     raw_definitions = extract_definitions(params, endpoint=endpoint, verb=verb)
 
     if schema_id is None:
-        for param in params:
-            if param.get('in') == 'body':
-                schema_id = param.get('schema', {}).get('$ref')
-                if schema_id:
-                    schema_id = schema_id.split('/')[-1]
-                    break  # consider only the first
+        if request.method == 'GET':
+            schema_id = schema_id_for_source('query', params)
+        else:
+            schema_id = schema_id_for_source('body', params)
 
     if schema_id is None:
         # if it is still none use first raw_definition extracted
@@ -337,18 +341,52 @@ def validate(
 
     main_def['definitions'] = definitions
 
-    for key, value in definitions.items():
-        if 'id' in value:
-            del value['id']
+    strict_validation = True
+    if request.method == 'GET':
+        strict_validation = False
 
+    validate_data(data, main_def, strict_validation=strict_validation)
+
+    # do not validate headers if data is not None
+    if not should_validate_headers:
+        return
+
+    # Headers validation
+
+    schema_id = schema_id_for_source('headers', params)
+
+    if not schema_id:
+        return
+
+    for defi in raw_definitions:
+        if defi['id'].lower() == schema_id.lower():
+            main_def = defi.copy()
+
+    data = {k.lower(): v for k, v in dict(request.headers).items()}
+    validate_data(data, main_def, strict_validation=False)
+
+
+def schema_id_for_source(source, params):
+    schema_id = None
+    for param in params:
+        if param.get('in') == source:
+            schema_id = param.get('schema', {}).get('$ref')
+            if schema_id:
+                schema_id = schema_id.split('/')[-1]
+                break  # consider only the first
+    return schema_id
+
+
+def validate_data(data, definition, validation_function=None, validation_error_handler=None,
+                  strict_validation=True):
     if validation_function is None:
         validation_function = jsonschema.validate
 
     try:
-        validation_function(data, main_def)
+        validation_function(data, definition, strict_validation=strict_validation)
     except Exception as err:
         if validation_error_handler is not None:
-            validation_error_handler(err, data, main_def)
+            validation_error_handler(err, data, definition)
         else:
             abort(Response(str(err), status=400))
 
