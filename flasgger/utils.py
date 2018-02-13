@@ -7,6 +7,8 @@ import os
 import re
 import jsonschema
 import yaml
+from jsonschema import Draft4Validator
+from jsonschema.validators import extend
 from six import string_types, text_type
 from copy import deepcopy
 from functools import wraps
@@ -344,7 +346,6 @@ def validate(
     strict_validation = True
     if request.method == 'GET':
         strict_validation = False
-
     validate_data(data, main_def, strict_validation=strict_validation)
 
     # do not validate headers if data is not None
@@ -380,15 +381,50 @@ def schema_id_for_source(source, params):
 def validate_data(data, definition, validation_function=None, validation_error_handler=None,
                   strict_validation=True):
     if validation_function is None:
-        validation_function = jsonschema.validate
+        if not strict_validation:
+            validation_function = liberal_validator().validate
+        else:
+            validation_function = jsonschema.validate
 
     try:
-        validation_function(data, definition, strict_validation=strict_validation)
+        validation_function(data, definition)
     except Exception as err:
         if validation_error_handler is not None:
             validation_error_handler(err, data, definition)
         else:
             abort(Response(str(err), status=400))
+
+
+def liberal_validator():
+    """
+    Validator that returns true for integers or numbers inside string.
+    Useful for Headers and GET call validation.
+    :return: custom validator
+    """
+    def type_or_string_type(type_name):
+        type_cast = int
+        if type_name == 'number':
+            type_cast = float
+
+        def type_or_string_type(checker, instance):
+            if Draft4Validator.TYPE_CHECKER.is_type(instance, type_name):
+                return True
+
+            if checker.is_type(instance, "string"):
+                try:
+                    type_cast(instance)
+                    return True
+                except ValueError:
+                    pass
+            return False
+
+        return type_or_string_type
+
+    type_checker = Draft4Validator.TYPE_CHECKER.redefine('integer', type_or_string_type('integer'))
+    CustomValidator = extend(Draft4Validator, type_checker=type_checker)
+    type_checker = CustomValidator.TYPE_CHECKER.redefine('number', type_or_string_type('number'))
+    CustomValidator = extend(CustomValidator, type_checker=type_checker)
+    return CustomValidator(schema={})
 
 
 def apispec_to_template(app, spec, definitions=None, paths=None):

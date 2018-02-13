@@ -13,3 +13,4 @@ wheel
 
 # install flasgger itself as editable
 -e .
+-e git://github.com/Julian/jsonschema.git#egg=jsonschema
