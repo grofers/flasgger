@@ -23,6 +23,40 @@ from .constants import OPTIONAL_FIELDS
 from .marshmallow_apispec import SwaggerView
 from .marshmallow_apispec import convert_schemas
 
+class YamlLoader(object):
+    """
+    Cache the swagger YAML files lazily.
+    """
+    def __init__(self):
+        self._cached_files = {}
+
+    def get(self, filepath, root=None):
+        if not root:
+            try:
+                frame_info = inspect.stack()[1]
+                root = os.path.dirname(os.path.abspath(frame_info[1]))
+            except Exception:
+                root = None
+        else:
+            root = os.path.dirname(root)
+
+        if not filepath.startswith('/'):
+            final_filepath = os.path.join(root, filepath)
+        else:
+            final_filepath = filepath
+
+        if self._cached_files.get(final_filepath) is not None:
+            return copy.deepcopy(self._cached_files[final_filepath])
+
+        full_doc = load_from_file(final_filepath)
+        yaml_start = full_doc.find('---')
+        swag = yaml.load(full_doc[yaml_start if yaml_start >= 0 else 0:])
+        self._cached_files[final_filepath] = swag
+        return copy.deepcopy(self._cached_files[final_filepath])
+
+
+yaml_loader = YamlLoader()
+
 
 def merge_specs(target, source):
     """
@@ -292,22 +326,7 @@ def validate(
     verb = request.method.lower()
 
     if filepath is not None:
-        if not root:
-            try:
-                frame_info = inspect.stack()[1]
-                root = os.path.dirname(os.path.abspath(frame_info[1]))
-            except Exception:
-                root = None
-        else:
-            root = os.path.dirname(root)
-
-        if not filepath.startswith('/'):
-            final_filepath = os.path.join(root, filepath)
-        else:
-            final_filepath = filepath
-        full_doc = load_from_file(final_filepath)
-        yaml_start = full_doc.find('---')
-        swag = yaml.load(full_doc[yaml_start if yaml_start >= 0 else 0:])
+        swag = yaml_loader.get(filepath, root)
     else:
         swag = copy.deepcopy(specs)
 
@@ -346,7 +365,10 @@ def validate(
     strict_validation = True
     if request.method == 'GET':
         strict_validation = False
-    validate_data(data, main_def, strict_validation=strict_validation)
+    validate_data(
+        data, main_def, validation_function=validation_function,
+        validation_error_handler=validation_error_handler, strict_validation=strict_validation
+    )
 
     # do not validate headers if data is not None
     if not should_validate_headers:
@@ -364,7 +386,10 @@ def validate(
             main_def = defi.copy()
 
     data = {k.lower(): v for k, v in dict(request.headers).items()}
-    validate_data(data, main_def, strict_validation=False)
+    validate_data(
+        data, main_def, validation_function=validation_function,
+        validation_error_handler=validation_error_handler, strict_validation=strict_validation
+    )
 
 
 def schema_id_for_source(source, params):
