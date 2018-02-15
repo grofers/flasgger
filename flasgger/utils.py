@@ -420,10 +420,13 @@ def liberal_validator():
 
         return type_or_string_type
 
-    type_checker = Draft4Validator.TYPE_CHECKER.redefine('integer', type_or_string_type('integer'))
+    type_checker = Draft4Validator.TYPE_CHECKER.redefine_many(
+        {
+            'integer': type_or_string_type('integer'),
+            'number': type_or_string_type('number')
+        }
+    )
     CustomValidator = extend(Draft4Validator, type_checker=type_checker)
-    type_checker = CustomValidator.TYPE_CHECKER.redefine('number', type_or_string_type('number'))
-    CustomValidator = extend(CustomValidator, type_checker=type_checker)
     return CustomValidator(schema={})
 
 
