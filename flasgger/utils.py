@@ -388,7 +388,7 @@ def validate(
     data = {k.lower(): v for k, v in dict(request.headers).items()}
     validate_data(
         data, main_def, validation_function=validation_function,
-        validation_error_handler=validation_error_handler, strict_validation=strict_validation
+        validation_error_handler=validation_error_handler, strict_validation=False
     )
 
 
