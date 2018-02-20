@@ -335,20 +335,56 @@ def validate(
         if item.get('schema')
     ]
 
-    definitions = {}
-    main_def = {}
     raw_definitions = extract_definitions(params, endpoint=endpoint, verb=verb)
 
     if schema_id is None:
-        if request.method == 'GET':
-            schema_id = schema_id_for_source('query', params)
-        else:
-            schema_id = schema_id_for_source('body', params)
+        schema_id = schema_id_for_request(params)
 
     if schema_id is None:
         # if it is still none use first raw_definition extracted
         if raw_definitions:
             schema_id = raw_definitions[0].get('id')
+
+    main_def = schema_for_id(schema_id, swag, raw_definitions)
+
+    # In GET call, query params are strings.  check type inside string.
+    strict_validation = True
+    if request.method == 'GET':
+        strict_validation = False
+
+    validate_data(
+        data, main_def, validation_function=validation_function,
+        validation_error_handler=validation_error_handler, strict_validation=strict_validation
+    )
+
+    # do not validate headers if data is not None
+    if should_validate_headers:
+        validate_headers(params, raw_definitions, validation_function, validation_error_handler)
+
+
+def validate_headers(params, raw_definitions, validation_function=None, validation_error_handler=None):
+    schema_id = schema_id_for_source('headers', params)
+    if not schema_id:
+        return
+
+    main_def = {}
+    for defi in raw_definitions:
+        if defi['id'].lower() == schema_id.lower():
+            main_def = defi.copy()
+
+    data = {k.lower(): v for k, v in dict(request.headers).items()}
+    validate_data(
+        data, main_def, validation_function=validation_function,
+        validation_error_handler=validation_error_handler, strict_validation=False
+    )
+
+
+def schema_for_id(schema_id, swag, raw_definitions):
+    if not schema_id:
+        return None
+
+    definitions = {}
+    main_def = {}
 
     for defi in raw_definitions:
         if defi['id'].lower() == schema_id.lower():
@@ -361,35 +397,14 @@ def validate(
         main_def = swag.get('definitions', {}).get(schema_id)
 
     main_def['definitions'] = definitions
+    return main_def
 
-    strict_validation = True
+
+def schema_id_for_request(params):
     if request.method == 'GET':
-        strict_validation = False
-    validate_data(
-        data, main_def, validation_function=validation_function,
-        validation_error_handler=validation_error_handler, strict_validation=strict_validation
-    )
-
-    # do not validate headers if data is not None
-    if not should_validate_headers:
-        return
-
-    # Headers validation
-
-    schema_id = schema_id_for_source('headers', params)
-
-    if not schema_id:
-        return
-
-    for defi in raw_definitions:
-        if defi['id'].lower() == schema_id.lower():
-            main_def = defi.copy()
-
-    data = {k.lower(): v for k, v in dict(request.headers).items()}
-    validate_data(
-        data, main_def, validation_function=validation_function,
-        validation_error_handler=validation_error_handler, strict_validation=False
-    )
+        return schema_id_for_source('query', params)
+    else:
+        return schema_id_for_source('body', params)
 
 
 def schema_id_for_source(source, params):
@@ -426,29 +441,50 @@ def liberal_validator():
     Useful for Headers and GET call validation.
     :return: custom validator
     """
-    def type_or_string_type(type_name):
-        type_cast = int
-        if type_name == 'number':
-            type_cast = float
 
-        def type_or_string_type(checker, instance):
-            if Draft4Validator.TYPE_CHECKER.is_type(instance, type_name):
+    def int_or_string_int(checker, instance):
+        if Draft4Validator.TYPE_CHECKER.is_type(instance, 'integer'):
+            return True
+
+        if checker.is_type(instance, "string"):
+            try:
+                int(instance)
+            except ValueError:
+                pass
+            else:
                 return True
 
-            if checker.is_type(instance, "string"):
-                try:
-                    type_cast(instance)
-                    return True
-                except ValueError:
-                    pass
-            return False
+        return False
 
-        return type_or_string_type
+    def number_or_string_number(checker, instance):
+        if Draft4Validator.TYPE_CHECKER.is_type(instance, 'number'):
+            return True
+
+        if checker.is_type(instance, "string"):
+            try:
+                float(instance)
+            except ValueError:
+                pass
+            else:
+                return True
+
+        return False
+
+    def bool_or_string_bool(checker, instance):
+        if Draft4Validator.TYPE_CHECKER.is_type(instance, 'boolean'):
+            return True
+
+        if checker.is_type(instance, "string"):
+            if instance.lower() == 'true' or instance.lower() == 'false':
+                return True
+
+        return False
 
     type_checker = Draft4Validator.TYPE_CHECKER.redefine_many(
         {
-            'integer': type_or_string_type('integer'),
-            'number': type_or_string_type('number')
+            'integer': int_or_string_int,
+            'number': number_or_string_number,
+            'boolean': bool_or_string_bool,
         }
     )
     CustomValidator = extend(Draft4Validator, type_checker=type_checker)

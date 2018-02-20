@@ -1,6 +1,6 @@
 # required
 Flask>=0.10
 PyYAML>=3.0
--e git://github.com/Julian/jsonschema.git#egg=jsonschema
+-e git://github.com/Julian/jsonschema.git@b07d0f1d893f4a21008e0c8922959ddcf0614b73#egg=jsonschema
 six>=1.10.0
 mistune
