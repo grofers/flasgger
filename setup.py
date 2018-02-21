@@ -47,9 +47,9 @@ setup(
     install_requires=[
         'Flask>=0.10',
         'PyYAML>=3.0',
-        'jsonschema',
+        'jsonschema>=3.0.0',
         'mistune',
         'six>=1.10.0'
     ],
-    dependency_links=['git+https://github.com/Julian/jsonschema.git@b07d0f1d893f4a21008e0c8922959ddcf0614b73#egg=jsonschema-3.0.0beta']
+    dependency_links=['git+https://github.com/Julian/jsonschema.git@b07d0f1d893f4a21008e0c8922959ddcf0614b73#egg=jsonschema-3.0.0']
 )
