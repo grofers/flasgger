@@ -7,6 +7,8 @@ import os
 import re
 import jsonschema
 import yaml
+from jsonschema import Draft4Validator
+from jsonschema.validators import extend
 from six import string_types, text_type
 from copy import deepcopy
 from functools import wraps
@@ -20,6 +22,40 @@ from flask.views import MethodView
 from .constants import OPTIONAL_FIELDS
 from .marshmallow_apispec import SwaggerView
 from .marshmallow_apispec import convert_schemas
+
+class YamlLoader(object):
+    """
+    Cache the swagger YAML files lazily.
+    """
+    def __init__(self):
+        self._cached_files = {}
+
+    def get(self, filepath, root=None):
+        if not root:
+            try:
+                frame_info = inspect.stack()[1]
+                root = os.path.dirname(os.path.abspath(frame_info[1]))
+            except Exception:
+                root = None
+        else:
+            root = os.path.dirname(root)
+
+        if not filepath.startswith('/'):
+            final_filepath = os.path.join(root, filepath)
+        else:
+            final_filepath = filepath
+
+        if self._cached_files.get(final_filepath) is not None:
+            return copy.deepcopy(self._cached_files[final_filepath])
+
+        full_doc = load_from_file(final_filepath)
+        yaml_start = full_doc.find('---')
+        swag = yaml.load(full_doc[yaml_start if yaml_start >= 0 else 0:])
+        self._cached_files[final_filepath] = swag
+        return copy.deepcopy(self._cached_files[final_filepath])
+
+
+yaml_loader = YamlLoader()
 
 
 def merge_specs(target, source):
@@ -270,8 +306,14 @@ def validate(
     if filepath is None and specs is None:
         abort(Response('Filepath or specs is needed to validate', status=500))
 
+    should_validate_headers = False
+
     if data is None:
-        data = request.json  # defaults
+        should_validate_headers = True
+        if request.method == 'GET':
+            data = request.args.to_dict()
+        else:
+            data = request.json  # defaults
     elif callable(data):
         # data=lambda: request.json
         data = data()
@@ -284,22 +326,7 @@ def validate(
     verb = request.method.lower()
 
     if filepath is not None:
-        if not root:
-            try:
-                frame_info = inspect.stack()[1]
-                root = os.path.dirname(os.path.abspath(frame_info[1]))
-            except Exception:
-                root = None
-        else:
-            root = os.path.dirname(root)
-
-        if not filepath.startswith('/'):
-            final_filepath = os.path.join(root, filepath)
-        else:
-            final_filepath = filepath
-        full_doc = load_from_file(final_filepath)
-        yaml_start = full_doc.find('---')
-        swag = yaml.load(full_doc[yaml_start if yaml_start >= 0 else 0:])
+        swag = yaml_loader.get(filepath, root)
     else:
         swag = copy.deepcopy(specs)
 
@@ -308,22 +335,56 @@ def validate(
         if item.get('schema')
     ]
 
-    definitions = {}
-    main_def = {}
     raw_definitions = extract_definitions(params, endpoint=endpoint, verb=verb)
 
     if schema_id is None:
-        for param in params:
-            if param.get('in') == 'body':
-                schema_id = param.get('schema', {}).get('$ref')
-                if schema_id:
-                    schema_id = schema_id.split('/')[-1]
-                    break  # consider only the first
+        schema_id = schema_id_for_request(params)
 
     if schema_id is None:
         # if it is still none use first raw_definition extracted
         if raw_definitions:
             schema_id = raw_definitions[0].get('id')
+
+    main_def = schema_for_id(schema_id, swag, raw_definitions)
+
+    # In GET call, query params are strings.  check type inside string.
+    strict_validation = True
+    if request.method == 'GET':
+        strict_validation = False
+
+    validate_data(
+        data, main_def, validation_function=validation_function,
+        validation_error_handler=validation_error_handler, strict_validation=strict_validation
+    )
+
+    # do not validate headers if data is not None
+    if should_validate_headers:
+        validate_headers(params, raw_definitions, validation_function, validation_error_handler)
+
+
+def validate_headers(params, raw_definitions, validation_function=None, validation_error_handler=None):
+    schema_id = schema_id_for_source('headers', params)
+    if not schema_id:
+        return
+
+    main_def = {}
+    for defi in raw_definitions:
+        if defi['id'].lower() == schema_id.lower():
+            main_def = defi.copy()
+
+    data = {k.lower(): v for k, v in dict(request.headers).items()}
+    validate_data(
+        data, main_def, validation_function=validation_function,
+        validation_error_handler=validation_error_handler, strict_validation=False
+    )
+
+
+def schema_for_id(schema_id, swag, raw_definitions):
+    if not schema_id:
+        return None
+
+    definitions = {}
+    main_def = {}
 
     for defi in raw_definitions:
         if defi['id'].lower() == schema_id.lower():
@@ -336,21 +397,98 @@ def validate(
         main_def = swag.get('definitions', {}).get(schema_id)
 
     main_def['definitions'] = definitions
+    return main_def
 
-    for key, value in definitions.items():
-        if 'id' in value:
-            del value['id']
 
+def schema_id_for_request(params):
+    if request.method == 'GET':
+        return schema_id_for_source('query', params)
+    else:
+        return schema_id_for_source('body', params)
+
+
+def schema_id_for_source(source, params):
+    schema_id = None
+    for param in params:
+        if param.get('in') == source:
+            schema_id = param.get('schema', {}).get('$ref')
+            if schema_id:
+                schema_id = schema_id.split('/')[-1]
+                break  # consider only the first
+    return schema_id
+
+
+def validate_data(data, definition, validation_function=None, validation_error_handler=None,
+                  strict_validation=True):
     if validation_function is None:
-        validation_function = jsonschema.validate
+        if not strict_validation:
+            validation_function = liberal_validator().validate
+        else:
+            validation_function = jsonschema.validate
 
     try:
-        validation_function(data, main_def)
+        validation_function(data, definition)
     except Exception as err:
         if validation_error_handler is not None:
-            validation_error_handler(err, data, main_def)
+            validation_error_handler(err, data, definition)
         else:
             abort(Response(str(err), status=400))
+
+
+def liberal_validator():
+    """
+    Validator that returns true for integers or numbers inside string.
+    Useful for Headers and GET call validation.
+    :return: custom validator
+    """
+
+    def int_or_string_int(checker, instance):
+        if Draft4Validator.TYPE_CHECKER.is_type(instance, 'integer'):
+            return True
+
+        if checker.is_type(instance, "string"):
+            try:
+                int(instance)
+            except ValueError:
+                pass
+            else:
+                return True
+
+        return False
+
+    def number_or_string_number(checker, instance):
+        if Draft4Validator.TYPE_CHECKER.is_type(instance, 'number'):
+            return True
+
+        if checker.is_type(instance, "string"):
+            try:
+                float(instance)
+            except ValueError:
+                pass
+            else:
+                return True
+
+        return False
+
+    def bool_or_string_bool(checker, instance):
+        if Draft4Validator.TYPE_CHECKER.is_type(instance, 'boolean'):
+            return True
+
+        if checker.is_type(instance, "string"):
+            if instance.lower() == 'true' or instance.lower() == 'false':
+                return True
+
+        return False
+
+    type_checker = Draft4Validator.TYPE_CHECKER.redefine_many(
+        {
+            'integer': int_or_string_int,
+            'number': number_or_string_number,
+            'boolean': bool_or_string_bool,
+        }
+    )
+    CustomValidator = extend(Draft4Validator, type_checker=type_checker)
+    return CustomValidator(schema={})
 
 
 def apispec_to_template(app, spec, definitions=None, paths=None):
