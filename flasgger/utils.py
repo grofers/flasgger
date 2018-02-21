@@ -319,7 +319,7 @@ def validate(
         data = data()
 
     if not data:
-        abort(Response('No data to validate', status=500))
+        data = {}
 
     # not used anymore but kept to reuse with marshmallow
     endpoint = request.endpoint.lower().replace('.', '_')
