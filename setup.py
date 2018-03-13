@@ -51,5 +51,5 @@ setup(
         'mistune',
         'six>=1.10.0'
     ],
-    dependency_links=['git+https://github.com/Julian/jsonschema.git@b07d0f1d893f4a21008e0c8922959ddcf0614b73#egg=jsonschema']
+    dependency_links=['git+https://github.com/Julian/jsonschema.git@b07d0f1d893f4a21008e0c8922959ddcf0614b73#egg=jsonschema-3.0']
 )
