@@ -5,6 +5,7 @@ import imp
 import inspect
 import os
 import re
+import json
 import jsonschema
 import yaml
 from jsonschema import Draft4Validator
@@ -266,7 +267,12 @@ def swag_from(
                     validation_error_handler=validation_error_handler,
                     **validate_args
                 )
-            return function(*args, **kwargs)
+            response = function(*args, **kwargs)
+            if validation is True:
+                validate_response(
+                    response, validation_function=validation_function,
+                    validation_error_handler=validation_error_handler, **validate_args)
+            return response
         return wrapper
 
     return decorator
@@ -376,6 +382,35 @@ def validate_headers(params, raw_definitions, validation_function=None, validati
     validate_data(
         data, main_def, validation_function=validation_function,
         validation_error_handler=validation_error_handler, strict_validation=False
+    )
+
+
+def validate_response(
+        response, filepath=None, root=None, specs=None,
+        validation_function=None, validation_error_handler=None
+):
+    if filepath is None and specs is None:
+        return
+
+    if filepath is not None:
+        swag = yaml_loader.get(filepath, root)
+    else:
+        swag = copy.deepcopy(specs)
+
+    response_spec = swag.get('responses', {}).get(response.status_code, {})
+    if not response_spec.get('schema'):
+        return
+
+    params = [item for item in swag.get('parameters', []) if item.get('schema')]
+    raw_definitions = extract_definitions(params)
+
+    main_def = schema_for_id(
+        schema_id_for_source(None, [response_spec]), swag, raw_definitions
+    )
+
+    validate_data(
+        json.loads(response.data), main_def, validation_function=validation_function,
+        validation_error_handler=validation_error_handler
     )
 
 
