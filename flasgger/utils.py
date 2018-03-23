@@ -24,6 +24,7 @@ from .constants import OPTIONAL_FIELDS
 from .marshmallow_apispec import SwaggerView
 from .marshmallow_apispec import convert_schemas
 
+
 class YamlLoader(object):
     """
     Cache the swagger YAML files lazily.
@@ -57,6 +58,79 @@ class YamlLoader(object):
 
 
 yaml_loader = YamlLoader()
+
+
+class SpecsFiller:
+    """
+    Replaces '#ref' keys with content
+    """
+    def __init__(self, root=None):
+        self.root = root
+        self.specs = None
+
+    def get_specs(self, specs):
+        """
+        Complete stand-alone specs (no '#ref' keys)
+        :param specs: specs dict
+        :return: specs dict
+        """
+        self.__curr_specs = specs
+        # first fill the definitions as others look upon 'defintions' for help
+        self.__curr_specs = self.fill_refs(self.__curr_specs, ['definitions'])
+        self.__curr_specs = self.fill_refs(self.__curr_specs)
+        self.specs = self.__curr_specs
+        return self.specs
+
+    def fill_refs(self, specs, keys=None):
+        """
+        traverses the whole dictionary, finds and replaces '$ref' with definition
+        :param json_specs: dictionary
+        :param keys: keys to find
+        :return:
+        """
+        specs = copy.deepcopy(specs)
+        if keys is None:
+            keys = specs.keys()
+        for key in keys:
+            if key == '$ref' and specs.get(key):
+                ref_dict = self.get_ref_dict(specs[key])
+                specs.update(ref_dict)
+                specs.pop('$ref')
+            elif type(specs.get(key)) is dict:
+                specs[key] = self.fill_refs(specs[key])
+            elif type(specs.get(key)) is list:
+                specs[key] = map(
+                    lambda x: self.fill_refs(x) if type(x) is dict else x, specs[key]
+                )
+        return specs
+
+    def get_ref_dict(self, ref):
+        """
+        :returns dict for given '$ref' link
+        :param ref: string eg: '#/defintions/User'
+        :return: dict
+        """
+        ref_path = ref.split('/')
+        if ref[0] == '#':
+            # belongs to same document
+            return SpecsFiller.get_nested_keys_value(self.__curr_specs, ref_path[1:])
+
+        # consider that it belongs to the same project
+        filepath = ref
+        ref_path = []
+        if '#' in ref:
+            file_ref_split = ref.split('#')
+            filepath = file_ref_split[0]
+            ref_path = file_ref_split[1].split('/')
+        specs = yaml_loader.get(filepath, self.root)
+        specs = SpecsFiller(self.root).get_specs(specs)
+        return SpecsFiller.get_nested_keys_value(specs, ref_path)
+
+    @staticmethod
+    def get_nested_keys_value(mapping, keys):
+        if not keys:
+            return copy.deepcopy(mapping)
+        return SpecsFiller.get_nested_keys_value(mapping[keys[0]], keys[1:])
 
 
 def merge_specs(target, source):
@@ -309,7 +383,7 @@ def validate(
     schema_id = schema_id or definition
 
     # for backwards compatibility with function signature
-    if filepath is None and specs is None:
+    if not filepath and specs is None:
         abort(Response('Filepath or specs is needed to validate', status=500))
 
     should_validate_headers = False
@@ -335,6 +409,8 @@ def validate(
         swag = yaml_loader.get(filepath, root)
     else:
         swag = copy.deepcopy(specs)
+
+    swag = SpecsFiller(root).get_specs(swag)
 
     params = [
         item for item in swag.get('parameters', [])
@@ -389,7 +465,7 @@ def validate_response(
         response, filepath=None, root=None, specs=None,
         validation_function=None, validation_error_handler=None
 ):
-    if filepath is None and specs is None:
+    if not filepath and specs is None:
         return
 
     if filepath is not None:
@@ -397,19 +473,14 @@ def validate_response(
     else:
         swag = copy.deepcopy(specs)
 
-    response_spec = swag.get('responses', {}).get(response.status_code, {})
-    if not response_spec.get('schema'):
+    swag = SpecsFiller(root).get_specs(swag)
+
+    resp_schema = swag.get('responses', {}).get(response.status_code, {}).get('schema')
+    if not resp_schema:
         return
 
-    params = [item for item in swag.get('parameters', []) if item.get('schema')]
-    raw_definitions = extract_definitions(params)
-
-    main_def = schema_for_id(
-        schema_id_for_source(None, [response_spec]), swag, raw_definitions
-    )
-
     validate_data(
-        json.loads(response.data), main_def, validation_function=validation_function,
+        json.loads(response.data), resp_schema, validation_function=validation_function,
         validation_error_handler=validation_error_handler
     )
 
