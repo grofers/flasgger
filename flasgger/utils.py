@@ -68,6 +68,9 @@ class SpecsFiller:
         self.root = root
         self.specs = None
 
+        # Private vars
+        self.__curr_specs = {}
+
     def get_specs(self, specs):
         """
         Complete stand-alone specs (no '#ref' keys)
@@ -76,12 +79,14 @@ class SpecsFiller:
         """
         self.__curr_specs = specs
         # first fill the definitions as others look upon 'defintions' for help
-        self.__curr_specs = self.fill_refs(self.__curr_specs, ['definitions'])
+        self.__curr_specs['definitions'] = self.fill_refs(
+            self.__curr_specs.get('definitions', {})
+        )
         self.__curr_specs = self.fill_refs(self.__curr_specs)
         self.specs = self.__curr_specs
         return self.specs
 
-    def fill_refs(self, specs, keys=None):
+    def fill_refs(self, specs):
         """
         traverses the whole dictionary, finds and replaces '$ref' with definition
         :param json_specs: dictionary
@@ -89,9 +94,7 @@ class SpecsFiller:
         :return:
         """
         specs = copy.deepcopy(specs)
-        if keys is None:
-            keys = specs.keys()
-        for key in keys:
+        for key in specs.keys():
             if key == '$ref' and specs.get(key):
                 ref_dict = self.get_ref_dict(specs[key])
                 specs.update(ref_dict)
