@@ -266,7 +266,7 @@ def get_specs(rules, ignore_verbs, optional_fields, sanitizer):
 def swag_from(
         specs=None, filetype=None, endpoint=None, methods=None,
         validation=False, schema_id=None, data=None, definition=None,
-        validation_function=None, validation_error_handler=None):
+        validation_function=None, validation_error_handler=None, root=None):
     """
     Takes a filename.yml, a dictionary or object and loads swagger specs.
 
@@ -288,16 +288,24 @@ def swag_from(
         the schema being used to validate as the third argument
     """
 
-    def resolve_path(function, filepath):
+    def resolve_path(filepath):
+        root = get_root_path(filepath)
         if not filepath.startswith('/'):
-            if not hasattr(function, 'root_path'):
-                function.root_path = get_root_path(function)
-            res = os.path.join(function.root_path, filepath)
-            return res
+            if root:
+                res = os.path.join(root, filepath)
+                return res
         return filepath
 
+    def get_root_path(filepath):
+        if root:
+            return root
+        if filepath.startswith('/'):
+            return os.path.dirname(filepath)
+        abort(400, 'start spec path with "/" or specify root')
+
+
     def set_from_filepath(function):
-        final_filepath = resolve_path(function, specs)
+        final_filepath = resolve_path(specs)
         function.swag_type = filetype or specs.split('.')[-1]
 
         if endpoint or methods:
@@ -326,9 +334,10 @@ def swag_from(
             # function must have or a single swag_path or a list of them
             swag_path = getattr(function, 'swag_path', None)
             swag_paths = getattr(function, 'swag_paths', None)
+            root_path = get_root_path(specs)
             validate_args = {
                 'filepath': swag_path or swag_paths,
-                'root': getattr(function, 'root_path', None)
+                'root': root_path,
             }
         if isinstance(specs, dict):
             set_from_specs_dict(function)
