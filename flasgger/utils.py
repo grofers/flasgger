@@ -93,19 +93,19 @@ class SpecsFiller:
         :param keys: keys to find
         :return:
         """
-        specs = copy.deepcopy(specs)
+        new_specs = copy.deepcopy(specs)
         for key in specs.keys():
-            if key == '$ref' and specs.get(key):
-                ref_dict = self.get_ref_dict(specs[key])
-                specs.update(ref_dict)
-                specs.pop('$ref')
-            elif type(specs.get(key)) is dict:
-                specs[key] = self.fill_refs(specs[key])
-            elif type(specs.get(key)) is list:
-                specs[key] = map(
-                    lambda x: self.fill_refs(x) if type(x) is dict else x, specs[key]
+            if key == '$ref' and new_specs.get(key):
+                ref_dict = self.get_ref_dict(new_specs[key])
+                new_specs.update(ref_dict)
+                new_specs.pop('$ref')
+            elif type(new_specs.get(key)) is dict:
+                new_specs[key] = self.fill_refs(new_specs[key])
+            elif type(new_specs.get(key)) is list:
+                new_specs[key] = map(
+                    lambda x: self.fill_refs(x) if type(x) is dict else x, new_specs[key]
                 )
-        return specs
+        return new_specs
 
     def get_ref_dict(self, ref):
         """
