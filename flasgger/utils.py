@@ -39,8 +39,6 @@ class YamlLoader(object):
                 root = os.path.dirname(os.path.abspath(frame_info[1]))
             except Exception:
                 root = None
-        else:
-            root = os.path.dirname(root)
 
         if not filepath.startswith('/'):
             final_filepath = os.path.join(root, filepath)
@@ -78,11 +76,11 @@ class SpecsFiller:
         :return: specs dict
         """
         self.__curr_specs = specs
-        # first fill the definitions as others look upon 'defintions' for help
-        self.__curr_specs['definitions'] = self.fill_refs(
+        # first fill the definitions as others look up to 'definitions' for help
+        self.fill_refs(
             self.__curr_specs.get('definitions', {})
         )
-        self.__curr_specs = self.fill_refs(self.__curr_specs)
+        self.fill_refs(self.__curr_specs)
         self.specs = self.__curr_specs
         return self.specs
 
@@ -92,20 +90,22 @@ class SpecsFiller:
         :param json_specs: dictionary
         :param keys: keys to find
         :return:
+
+        NOTE: can't do functionally because a key above can
+        be referenced below, so need to keep the self.__curr_specs up to date.
         """
-        new_specs = copy.deepcopy(specs)
-        for key in specs.keys():
-            if key == '$ref' and new_specs.get(key):
-                ref_dict = self.get_ref_dict(new_specs[key])
-                new_specs.update(ref_dict)
-                new_specs.pop('$ref')
-            elif type(new_specs.get(key)) is dict:
-                new_specs[key] = self.fill_refs(new_specs[key])
-            elif type(new_specs.get(key)) is list:
-                new_specs[key] = map(
-                    lambda x: self.fill_refs(x) if type(x) is dict else x, new_specs[key]
-                )
-        return new_specs
+        specs_keys = list(specs.keys())  # keys can change later, hence, copying
+        for key in specs_keys:
+            if key == '$ref' and specs.get(key):
+                ref_dict = self.get_ref_dict(specs[key])
+                specs.update(ref_dict)
+                specs.pop('$ref')
+            elif type(specs[key]) is dict:
+                self.fill_refs(specs[key])
+            elif type(specs[key]) is list:
+                for spec in specs[key]:
+                    if type(spec) is dict:
+                        self.fill_refs(spec)
 
     def get_ref_dict(self, ref):
         """
@@ -127,6 +127,7 @@ class SpecsFiller:
             ref_path = file_ref_split[1].split('/')
         specs = yaml_loader.get(filepath, self.root)
         specs = SpecsFiller(self.root).get_specs(specs)
+
         return SpecsFiller.get_nested_keys_value(specs, ref_path)
 
     @staticmethod
