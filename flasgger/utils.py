@@ -267,7 +267,8 @@ def get_specs(rules, ignore_verbs, optional_fields, sanitizer):
 def swag_from(
         specs=None, filetype=None, endpoint=None, methods=None,
         validation=False, schema_id=None, data=None, definition=None,
-        validation_function=None, validation_error_handler=None, root=None):
+        validation_function=None, validation_error_handler=None,
+        root=None, validate_response=None):
     """
     Takes a filename.yml, a dictionary or object and loads swagger specs.
 
@@ -287,6 +288,9 @@ def swag_from(
         exceptions thrown when validating which takes the exception
         thrown as the first, the data being validated as the second and
         the schema being used to validate as the third argument
+    :param root: directory from which all relative paths and #refs are defined
+    :param validate_response: should validate response or not. If not defined
+        takes same value as validation
     """
 
     def resolve_path(filepath):
@@ -346,7 +350,7 @@ def swag_from(
 
         @wraps(function)
         def wrapper(*args, **kwargs):
-            if validation is True:
+            if validation:
                 validate(
                     data,
                     schema_id or definition,
@@ -355,7 +359,7 @@ def swag_from(
                     **validate_args
                 )
             response = function(*args, **kwargs)
-            if validation is True:
+            if validate_response or (validate_response is None and validation):
                 validate_response(
                     response, validation_function=validation_function,
                     validation_error_handler=validation_error_handler, **validate_args)
